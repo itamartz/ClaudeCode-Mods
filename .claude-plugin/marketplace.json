@@ -1,0 +1,5 @@
+{
+  "name": "claudecode-mods",
+  "owner": { "name": "itamartz" },
+  "plugins": [{ "name": "athena-progress", "source": "./progress" }]
+}

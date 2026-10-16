@@ -1,0 +1,14 @@
+{
+  "name": "athena-progress",
+  "version": "0.1.0",
+  "description": "Pane listing task progress read from AthenaDev/progress/*.json; /progress toggles it",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "progressDir": {
+      "type": "string",
+      "title": "Progress folder",
+      "description": "Folder holding the progress *.json files",
+      "default": "C:\\Users\\Itamartz\\AthenaDev\\progress"
+    }
+  }
+}

@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { elapsed, isFinished, parseProgress, shownTasks, summary, taskKey } from '../hooks/progress.js'
+import { elapsed, isFinished, openCounts, parseProgress, shownTasks, summary, taskKey } from '../hooks/progress.js'
 
 const BIOS = JSON.stringify({
   title: 'BIOS phase 2',
@@ -84,7 +84,7 @@ test('/progress opens the pane and draws each file and task', async ($, on) => {
     expect(text).toContain('○ E2E')
     expect(text).toContain('✗ Licence — cert stale')
     expect(text).toContain('broken.json: invalid JSON')
-    expect(text).toContain('read 2026/10/15 20:05:00')
+    expect(text).toContain('read 2026/10/15 20:05:00 · 1 open card · 3 open tasks')
     await ui.unmount()
     await $.command.run({ command: 'progress', args: '' }) // toggle closed for the next loop
   }
@@ -339,4 +339,34 @@ test('/progress clear all hides finished cards and done tasks', async ($, on) =>
   const text = lines((await ui.find({ type: 'Box' }))!)
   expect(text.some(l => l.startsWith('😊'))).toBe(false)
   expect(text).not.toContain('✓ Catalog — 42 attributes')
+})
+
+test('openCounts: finished and invalid cards excluded; done tasks not counted, waiting/failed are', () => {
+  const card = (tasks: object[], extra = {}) => parseProgress('c.json', JSON.stringify({ title: 't', tasks, ...extra }))
+  const files = [
+    card([{ name: 'a', status: 'done' }, { name: 'b', status: 'waiting' }, { name: 'c', status: 'failed' }]),
+    card([{ name: 'd', status: 'running' }, { name: 'e', status: 'pending' }]),
+    card([{ name: 'f', status: 'done' }]),
+    card([{ name: 'g', status: 'running' }], { now: { action: 'done' } }),
+    parseProgress('bad.json', '{nope'),
+  ]
+  expect(openCounts(files)).toEqual({ cards: 2, tasks: 4 })
+  expect(openCounts([])).toEqual({ cards: 0, tasks: 0 })
+})
+
+test('footer counts open cards and tasks, singular and plural', async ($, on) => {
+  const two = JSON.stringify({ title: 'Two', tasks: [{ name: 'x', status: 'running' }, { name: 'y', status: 'waiting' }] })
+  const one = JSON.stringify({ title: 'One', tasks: [{ name: 'z', status: 'done' }, { name: 'w', status: 'pending' }] })
+  world(on, { 'two.json': two, 'one.json': one })
+  await $.command.run({ command: 'progress', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(lines((await ui.find({ type: 'Box' }))!)).toContain('read 2026/10/15 20:05:00 · 2 open cards · 3 open tasks')
+  await ui.unmount()
+})
+
+test('footer says "1 open card · 1 open task"', async ($, on) => {
+  world(on, { 'one.json': JSON.stringify({ title: 'One', tasks: [{ name: 'z', status: 'done' }, { name: 'w', status: 'failed' }] }) })
+  await $.command.run({ command: 'progress', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(lines((await ui.find({ type: 'Box' }))!)).toContain('read 2026/10/15 20:05:00 · 1 open card · 1 open task')
 })

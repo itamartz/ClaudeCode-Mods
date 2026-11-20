@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import { ANSWERS, MARK, answerKey, answerText, dismissKey, elapsed, isFinished, parseProgress, shownTasks, summary, taskKey, visible } from './progress.js'
+import { ANSWERS, MARK, answerKey, answerText, dismissKey, elapsed, isFinished, openCounts, parseProgress, shownTasks, summary, taskKey, visible } from './progress.js'
 
 // Read-only: the mod lists and reads this one folder, nothing else.
 // Set by register from the progressDir option (see plugin.json userConfig).
@@ -150,10 +150,13 @@ export const register = (on, options) => {
           ),
         ),
       ),
-      h(Text, { dimColor: true }, `read ${at}`),
+      h(Text, { dimColor: true }, footer(at, openCounts(all))),
     )
   })
 }
+
+const plural = (n, word) => `${n} open ${word}${n === 1 ? '' : 's'}`
+const footer = (at, { cards, tasks }) => `read ${at} · ${plural(cards, 'card')} · ${plural(tasks, 'task')}`
 
 // A task waiting on the user: the question highlighted, then Done / In progress / Blocked, or the answer once given.
 function waitingRow($, { Box, Text, Button }, f, t, answer) {

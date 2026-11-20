@@ -1,6 +1,6 @@
 # athena-progress
 
-A Claude Code mod that adds a `/progress` pane. The pane shows the progress JSON files that Claude subagents write to a folder. Running work is listed first, with its tasks; finished work collapses to one green 😊 line.
+A Claude Code mod that adds a `/progress` pane. The pane shows the progress JSON files that Claude subagents write to a folder. Running work is listed first, with its tasks; finished work collapses to one green 😊 line. The bottom line shows when the folder was last read and how many cards and tasks are still open: `read <time> · 2 open cards · 5 open tasks`.
 
 ## Install
 

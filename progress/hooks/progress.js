@@ -77,6 +77,12 @@ export const isWaiting = f => f.tasks.some(t => t.status === 'waiting')
 // Marked done, or every task done (and none waiting on the user): the file collapses to one smiley line.
 export const isFinished = f => !f.error && !isWaiting(f) && (f.finished === true || (f.tasks.length > 0 && f.tasks.every(t => t.status === 'done')))
 
+// Footer counts: cards not finished and not invalid, and their tasks not done.
+export function openCounts(files) {
+  const open = files.filter(f => !f.error && !isFinished(f))
+  return { cards: open.length, tasks: open.reduce((n, f) => n + f.tasks.filter(t => t.status !== 'done').length, 0) }
+}
+
 export function summary(tasks, hidden = 0) {
   const n = s => tasks.filter(t => t.status === s).length
   const extra = [n('waiting') && `${n('waiting')} waiting`, n('running') && `${n('running')} running`, n('failed') && `${n('failed')} failed`, hidden && `${hidden} hidden`].filter(Boolean)

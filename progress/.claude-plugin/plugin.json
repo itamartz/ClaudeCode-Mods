@@ -1,6 +1,6 @@
 {
   "name": "athena-progress",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Pane listing task progress read from AthenaDev/progress/*.json; waiting tasks get Done / In progress / Blocked buttons that answer into the session; /progress toggles it",
   "types": "./types/index.d.ts",
   "userConfig": {

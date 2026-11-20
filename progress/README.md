@@ -35,6 +35,9 @@ The mod reads `C:\Users\Itamartz\AthenaDev\progress` by default. If the folder i
 | `/progress` | Toggle the pane |
 | `/progress refresh` | Re-read the folder now |
 | `/progress clear` | Hide finished files until they change |
+| `/progress clear tasks` | Hide the done tasks inside running files (kept across sessions; the summary line adds `n hidden`). A task that becomes done later hides at the next `clear tasks` |
+| `/progress clear all` | Both of the above |
+| `/progress show` | Un-hide everything hidden by `clear` and `clear tasks` |
 
 ## Progress file format
 

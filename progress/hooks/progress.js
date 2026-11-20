@@ -77,14 +77,20 @@ export const isWaiting = f => f.tasks.some(t => t.status === 'waiting')
 // Marked done, or every task done (and none waiting on the user): the file collapses to one smiley line.
 export const isFinished = f => !f.error && !isWaiting(f) && (f.finished === true || (f.tasks.length > 0 && f.tasks.every(t => t.status === 'done')))
 
-export function summary(tasks) {
+export function summary(tasks, hidden = 0) {
   const n = s => tasks.filter(t => t.status === s).length
-  const extra = [n('waiting') && `${n('waiting')} waiting`, n('running') && `${n('running')} running`, n('failed') && `${n('failed')} failed`].filter(Boolean)
+  const extra = [n('waiting') && `${n('waiting')} waiting`, n('running') && `${n('running')} running`, n('failed') && `${n('failed')} failed`, hidden && `${hidden} hidden`].filter(Boolean)
   return `${n('done')}/${tasks.length} done${extra.length ? ' · ' + extra.join(' · ') : ''}`
 }
 
 // A dismissal is keyed on file + updated, so a file that changes later shows again.
 export const dismissKey = f => `${f.file}|${f.updated}`
+
+// A task hidden by "clear tasks" is keyed on file + task name, so it stays hidden while the file changes.
+export const taskKey = (f, t) => `${f.file}|${t.name}`
+
+// Only done tasks are ever hidden, whatever keys are stored.
+export const shownTasks = (f, hidden) => f.tasks.filter(t => t.status !== 'done' || !hidden.includes(taskKey(f, t)))
 
 // An answer to a waiting task is keyed like a dismissal, so it lapses when the file changes.
 export const answerKey = (f, t) => `${dismissKey(f)}|${t.name}`

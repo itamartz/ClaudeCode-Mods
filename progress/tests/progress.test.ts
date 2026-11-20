@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { elapsed, isFinished, parseProgress, summary } from '../hooks/progress.js'
+import { elapsed, isFinished, parseProgress, shownTasks, summary, taskKey } from '../hooks/progress.js'
 
 const BIOS = JSON.stringify({
   title: 'BIOS phase 2',
@@ -284,3 +284,59 @@ for (const answer of ['Done', 'In progress', 'Blocked']) {
     expect(await again.find({ key: `w.json|2026/10/15 20:09:00|Merge|${answer}` })).toBeDefined()
   })
 }
+
+test('clear tasks: only done tasks with a hidden key are hidden; summary counts them', () => {
+  const f = parseProgress('a.json', BIOS)
+  const keys = f.tasks.map(t => taskKey(f, t)) // every name keyed, done or not
+  expect(taskKey(f, f.tasks[0])).toBe('a.json|Catalog')
+  expect(shownTasks(f, keys).map(t => t.name)).toEqual(['Agent apply', 'E2E', 'Licence'])
+  expect(shownTasks(f, []).length).toBe(4)
+  expect(summary(f.tasks, 1)).toBe('1/4 done · 1 running · 1 failed · 1 hidden')
+  expect(summary(f.tasks, 0)).toBe('1/4 done · 1 running · 1 failed')
+})
+
+test('/progress clear tasks hides done tasks in running cards, kept in the store; show un-hides', async ($, on) => {
+  const folder: Record<string, string> = { 'bios.json': BIOS, 'd.json': DONE('2026/10/15 20:00:00') }
+  world(on, folder)
+  await $.command.run({ command: 'progress', args: '' })
+  expect((await $.command.run({ command: 'progress', args: 'clear tasks' })).text).toBe('Hid 1 done tasks.')
+  let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  let text = lines((await ui.find({ type: 'Box' }))!)
+  expect(text).toContain('1/4 done · 1 running · 1 failed · 1 hidden · updated 20:00:00 · checked 20:05:00')
+  expect(text).not.toContain('✓ Catalog — 42 attributes')
+  expect(text).toContain('● Agent apply — PC-5')
+  expect(text).toContain('😊 Done one — done · 1 tasks · updated 20:00:00') // plain clear's job, not this one
+  await ui.unmount()
+  // refresh re-reads $.store, so Catalog staying hidden proves the key was stored.
+  // A task that becomes done later stays shown until the next clear tasks.
+  folder['bios.json'] = BIOS.replace('"running"', '"done"')
+  await $.command.run({ command: 'progress', args: 'refresh' })
+  ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  text = lines((await ui.find({ type: 'Box' }))!)
+  expect(text).toContain('✓ Agent apply — PC-5')
+  expect(text).not.toContain('✓ Catalog — 42 attributes')
+  await ui.unmount()
+  expect((await $.command.run({ command: 'progress', args: 'show' })).text).toBe('Showing everything.')
+  ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(lines((await ui.find({ type: 'Box' }))!)).toContain('✓ Catalog — 42 attributes')
+})
+
+test('a hidden key never hides a task that is not done', async ($, on) => {
+  world(on, { 'bios.json': BIOS }, { hiddenTasks: ['bios.json|Agent apply', 'bios.json|Catalog'] })
+  await $.command.run({ command: 'progress', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const text = lines((await ui.find({ type: 'Box' }))!)
+  expect(text).toContain('● Agent apply — PC-5')
+  expect(text).not.toContain('✓ Catalog — 42 attributes')
+  expect(text).toContain('1/4 done · 1 running · 1 failed · 1 hidden · updated 20:00:00 · checked 20:05:00')
+})
+
+test('/progress clear all hides finished cards and done tasks', async ($, on) => {
+  world(on, { 'bios.json': BIOS, 'd.json': DONE('2026/10/15 20:00:00') })
+  await $.command.run({ command: 'progress', args: '' })
+  expect((await $.command.run({ command: 'progress', args: 'clear all' })).text).toBe('Cleared 1 finished. Hid 1 done tasks.')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const text = lines((await ui.find({ type: 'Box' }))!)
+  expect(text.some(l => l.startsWith('😊'))).toBe(false)
+  expect(text).not.toContain('✓ Catalog — 42 attributes')
+})

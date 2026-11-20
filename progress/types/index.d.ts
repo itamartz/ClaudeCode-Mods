@@ -3,6 +3,6 @@ export type ProgressFile = { file: string; title: string; updated: string; tasks
 
 declare module 'claude-code' {
   interface PluginState {
-    'athena-progress': { files: ProgressFile[]; readAt: string; dismissed: string[]; answers: Record<string, string> }
+    'athena-progress': { files: ProgressFile[]; readAt: string; dismissed: string[]; hiddenTasks: string[]; answers: Record<string, string> }
   }
 }

@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import { ANSWERS, MARK, answerKey, answerText, dismissKey, elapsed, isFinished, parseProgress, summary, visible } from './progress.js'
+import { ANSWERS, MARK, answerKey, answerText, dismissKey, elapsed, isFinished, parseProgress, shownTasks, summary, taskKey, visible } from './progress.js'
 
 // Read-only: the mod lists and reads this one folder, nothing else.
 // Set by register from the progressDir option (see plugin.json userConfig).
@@ -11,6 +11,8 @@ const files = atom({ plugin: 'athena-progress', key: 'files' }, [])
 const readAt = atom({ plugin: 'athena-progress', key: 'readAt' }, '')
 // Mirrors $.store 'dismissed' (kept across sessions) so the pane redraws on change.
 const dismissed = atom({ plugin: 'athena-progress', key: 'dismissed' }, [])
+// Mirrors $.store 'hiddenTasks': done tasks hidden inside running cards, by taskKey.
+const hiddenTasks = atom({ plugin: 'athena-progress', key: 'hiddenTasks' }, [])
 // Answers given to waiting tasks this session, by answerKey; never written to the progress files.
 const answers = atom({ plugin: 'athena-progress', key: 'answers' }, {})
 
@@ -32,11 +34,25 @@ async function load($) {
   await update($, files, () => parsed)
   const kept = await $.store.get('dismissed')
   await update($, dismissed, () => (Array.isArray(kept) ? kept : []))
+  const hid = await $.store.get('hiddenTasks')
+  await update($, hiddenTasks, () => (Array.isArray(hid) ? hid : []))
   const now = await $.clock.now()
   await update($, readAt, () => stamp(new Date(now)))
 }
 
 const isOpen = async $ => (await $.ui.panes()).some(p => p.id === PANE)
+
+// Dismiss every finished file; returns the reply line.
+async function clearFinished($) {
+  const keys = (await read($, files)).filter(f => isFinished(f)).map(dismissKey)
+  const old = await read($, dismissed)
+  const fresh = keys.filter(k => !old.includes(k))
+  // Keep only keys that still match a file, so the store never grows unbounded.
+  const next = [...old.filter(k => keys.includes(k)), ...fresh]
+  await update($, dismissed, () => next)
+  await $.store.set('dismissed', next)
+  return `Cleared ${fresh.length} finished.`
+}
 
 /** @type {import('claude-code').Register} */
 export const register = (on, options) => {
@@ -44,8 +60,8 @@ export const register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'progress',
-      description: 'Toggle the Athena progress pane (refresh re-reads now, clear hides finished work)',
-      argumentHint: '[refresh|clear]',
+      description: 'Toggle the Athena progress pane (refresh re-reads now, clear hides finished work, clear tasks hides done tasks, show un-hides)',
+      argumentHint: '[refresh|clear|clear tasks|clear all|show]',
       immediate: true,
     })
     // Cheap: one directory listing every 20 s, and only while the pane is open.
@@ -62,20 +78,31 @@ export const register = (on, options) => {
   })
 
   on('command.run', { command: 'progress' }, async ($, e) => {
-    if (e.args.trim() === 'refresh') {
+    const arg = e.args.trim()
+    if (arg === 'refresh') {
       await load($)
       return { text: 'Progress re-read.' }
     }
-    if (e.args.trim() === 'clear') {
+    if (arg === 'show') {
+      await update($, dismissed, () => [])
+      await update($, hiddenTasks, () => [])
+      await $.store.set('dismissed', [])
+      await $.store.set('hiddenTasks', [])
+      return { text: 'Showing everything.' }
+    }
+    if (arg === 'clear' || arg === 'clear tasks' || arg === 'clear all') {
       await load($)
-      const keys = (await read($, files)).filter(f => isFinished(f)).map(dismissKey)
-      const old = await read($, dismissed)
-      const fresh = keys.filter(k => !old.includes(k))
-      // Keep only keys that still match a file, so the store never grows unbounded.
-      const next = [...old.filter(k => keys.includes(k)), ...fresh]
-      await update($, dismissed, () => next)
-      await $.store.set('dismissed', next)
-      return { text: `Cleared ${fresh.length} finished.` }
+      const said = []
+      if (arg !== 'clear tasks') said.push(await clearFinished($))
+      if (arg !== 'clear') {
+        // Every done task in a running card; keys of tasks gone or no longer done drop out.
+        const keys = (await read($, files)).filter(f => !f.error && !isFinished(f)).flatMap(f => f.tasks.filter(t => t.status === 'done').map(t => taskKey(f, t)))
+        const old = await read($, hiddenTasks)
+        await update($, hiddenTasks, () => keys)
+        await $.store.set('hiddenTasks', keys)
+        said.push(`Hid ${keys.filter(k => !old.includes(k)).length} done tasks.`)
+      }
+      return { text: said.join(' ') }
     }
     if (await isOpen($)) {
       await $.ui.close({ id: PANE })
@@ -92,6 +119,7 @@ export const register = (on, options) => {
     const list = visible(all, await read($, dismissed))
     const at = await read($, readAt)
     const given = await read($, answers)
+    const hid = await read($, hiddenTasks)
     if (all.length > 0 && list.length === 0) return h(Text, { dimColor: true }, 'No running work')
     if (list.length === 0) {
       return h(Box, { flexDirection: 'column' },
@@ -99,21 +127,21 @@ export const register = (on, options) => {
         h(Text, { dimColor: true, wrap: 'truncate-middle' }, DIR))
     }
     return h(Box, { flexDirection: 'column' },
-      ...list.map(f => isFinished(f)
+      ...list.map(f => [f, shownTasks(f, hid)]).map(([f, shown]) => isFinished(f)
         ? h(Text, { key: f.file, color: 'success', wrap: 'truncate-end' },
             `😊 ${f.title} — done · ${f.tasks.length} tasks${f.updated ? ' · updated ' + f.updated.slice(-8) : ''}`)
         : h(Box, { key: f.file, flexDirection: 'column', marginBottom: 1 },
           h(Text, { bold: true, wrap: 'truncate-end' }, f.title),
           f.error
             ? h(Text, { color: 'error' }, `${f.file}: ${f.error}`)
-            : h(Text, { dimColor: true }, `${summary(f.tasks)}${f.updated ? ' · updated ' + f.updated.slice(-8) : ''}${at ? ' · checked ' + at.slice(-8) : ''}`),
+            : h(Text, { dimColor: true }, `${summary(f.tasks, f.tasks.length - shown.length)}${f.updated ? ' · updated ' + f.updated.slice(-8) : ''}${at ? ' · checked ' + at.slice(-8) : ''}`),
           f.now
             ? h(Text, { wrap: 'truncate-end' },
                 h(Text, { color: 'warning' }, '▶ '),
                 f.now.action,
                 h(Text, { dimColor: true }, elapsed(f.now.since, at) ? ` · ${elapsed(f.now.since, at)}` : ''))
             : '',
-          ...f.tasks.map(t => t.status === 'waiting'
+          ...shown.map(t => t.status === 'waiting'
             ? waitingRow($, { Box, Text, Button }, f, t, given[answerKey(f, t)])
             : h(Text, { wrap: 'truncate-end' },
               h(Text, { color: MARK[t.status].color }, MARK[t.status].glyph),

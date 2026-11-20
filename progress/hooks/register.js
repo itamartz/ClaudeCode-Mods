@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import { MARK, dismissKey, elapsed, isFinished, parseProgress, summary, visible } from './progress.js'
+import { ANSWERS, MARK, answerKey, answerText, dismissKey, elapsed, isFinished, parseProgress, summary, visible } from './progress.js'
 
 // Read-only: the mod lists and reads this one folder, nothing else.
 // Set by register from the progressDir option (see plugin.json userConfig).
@@ -11,6 +11,8 @@ const files = atom({ plugin: 'athena-progress', key: 'files' }, [])
 const readAt = atom({ plugin: 'athena-progress', key: 'readAt' }, '')
 // Mirrors $.store 'dismissed' (kept across sessions) so the pane redraws on change.
 const dismissed = atom({ plugin: 'athena-progress', key: 'dismissed' }, [])
+// Answers given to waiting tasks this session, by answerKey; never written to the progress files.
+const answers = atom({ plugin: 'athena-progress', key: 'answers' }, {})
 
 const pad = n => String(n).padStart(2, '0')
 const stamp = d => `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
@@ -85,10 +87,11 @@ export const register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
     const all = await read($, files)
     const list = visible(all, await read($, dismissed))
     const at = await read($, readAt)
+    const given = await read($, answers)
     if (all.length > 0 && list.length === 0) return h(Text, { dimColor: true }, 'No running work')
     if (list.length === 0) {
       return h(Box, { flexDirection: 'column' },
@@ -110,8 +113,9 @@ export const register = (on, options) => {
                 f.now.action,
                 h(Text, { dimColor: true }, elapsed(f.now.since, at) ? ` · ${elapsed(f.now.since, at)}` : ''))
             : '',
-          ...f.tasks.map(t =>
-            h(Text, { wrap: 'truncate-end' },
+          ...f.tasks.map(t => t.status === 'waiting'
+            ? waitingRow($, { Box, Text, Button }, f, t, given[answerKey(f, t)])
+            : h(Text, { wrap: 'truncate-end' },
               h(Text, { color: MARK[t.status].color }, MARK[t.status].glyph),
               ` ${t.name}`,
               t.detail ? h(Text, { dimColor: true }, ` — ${t.detail}`) : ''),
@@ -121,4 +125,25 @@ export const register = (on, options) => {
       h(Text, { dimColor: true }, `read ${at}`),
     )
   })
+}
+
+// A task waiting on the user: the question highlighted, then Done / In progress / Blocked, or the answer once given.
+function waitingRow($, { Box, Text, Button }, f, t, answer) {
+  const k = answerKey(f, t)
+  return h(Box, { key: k, flexDirection: 'column' },
+    h(Text, { bold: true, color: MARK.waiting.color }, `${MARK.waiting.glyph} ${t.name}${t.detail ? ' — ' + t.detail : ''}`),
+    answer
+      ? h(Text, { color: 'success' }, `  ✓ answered: ${answer}`)
+      : h(Box, { flexDirection: 'row', gap: 1, marginLeft: 2 },
+        ...ANSWERS.map(a => h(Button, {
+          key: `${k}|${a}`,
+          label: a,
+          ...(a === 'Done' ? { variant: 'primary' } : {}),
+          onPress: async () => {
+            await update($, answers, m => ({ ...m, [k]: a }))
+            // A real user turn: queued by the engine, it starts once the session is idle.
+            await $.prompt.submit({ text: answerText(f, t, a), asUser: true })
+          },
+        }))),
+  )
 }

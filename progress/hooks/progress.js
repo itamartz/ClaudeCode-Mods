@@ -1,7 +1,7 @@
 // Pure helpers: parse one progress file and summarise it. No $ here, so tests call them directly.
 
-const STATUSES = ['done', 'running', 'pending', 'failed']
-const ALIAS = { ok: 'done', pass: 'done', complete: 'done', completed: 'done', fail: 'failed', error: 'failed' }
+const STATUSES = ['done', 'running', 'pending', 'failed', 'waiting']
+const ALIAS = { ok: 'done', pass: 'done', complete: 'done', completed: 'done', fail: 'failed', error: 'failed', wait: 'waiting', 'blocked-on-user': 'waiting' }
 
 // "done: 11402 pass" -> status by its first word (case-insensitive), the rest becomes detail.
 function normStatus(raw) {
@@ -12,7 +12,7 @@ function normStatus(raw) {
 
 function toTask(t) {
   if (typeof t === 'string') {
-    const m = /\b(done|running|pending|failed)\b/i.exec(t)
+    const m = /\b(done|running|pending|failed|waiting)\b/i.exec(t)
     return { name: t, status: m ? m[1].toLowerCase() : 'pending', detail: '' }
   }
   const { status, rest } = normStatus(t.status)
@@ -25,6 +25,7 @@ export const MARK = {
   running: { glyph: '●', color: 'warning' },
   pending: { glyph: '○', color: 'inactive' },
   failed: { glyph: '✗', color: 'error' },
+  waiting: { glyph: '🙋', color: 'permission' },
 }
 
 /** @returns {import('../types').ProgressFile} */
@@ -71,21 +72,31 @@ export function elapsed(since, at) {
   return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`
 }
 
-// Marked done, or every task done: the file collapses to one smiley line.
-export const isFinished = f => !f.error && (f.finished === true || (f.tasks.length > 0 && f.tasks.every(t => t.status === 'done')))
+export const isWaiting = f => f.tasks.some(t => t.status === 'waiting')
+
+// Marked done, or every task done (and none waiting on the user): the file collapses to one smiley line.
+export const isFinished = f => !f.error && !isWaiting(f) && (f.finished === true || (f.tasks.length > 0 && f.tasks.every(t => t.status === 'done')))
 
 export function summary(tasks) {
   const n = s => tasks.filter(t => t.status === s).length
-  const extra = [n('running') && `${n('running')} running`, n('failed') && `${n('failed')} failed`].filter(Boolean)
+  const extra = [n('waiting') && `${n('waiting')} waiting`, n('running') && `${n('running')} running`, n('failed') && `${n('failed')} failed`].filter(Boolean)
   return `${n('done')}/${tasks.length} done${extra.length ? ' · ' + extra.join(' · ') : ''}`
 }
 
 // A dismissal is keyed on file + updated, so a file that changes later shows again.
 export const dismissKey = f => `${f.file}|${f.updated}`
 
-// Not dismissed, running first, finished after; each group keeps its newest-first order.
+// An answer to a waiting task is keyed like a dismissal, so it lapses when the file changes.
+export const answerKey = (f, t) => `${dismissKey(f)}|${t.name}`
+
+// The user message a button press sends into the session.
+export const answerText = (f, t, answer) => `[progress] ${f.title} › ${t.name}: ${answer}`
+
+export const ANSWERS = ['Done', 'In progress', 'Blocked']
+
+// Not dismissed; waiting on the user first, then running, finished last; each group keeps its newest-first order.
 export function visible(list, dismissed) {
   const shown = list.filter(f => !dismissed.includes(dismissKey(f)))
   const done = isFinished
-  return [...shown.filter(f => !done(f)), ...shown.filter(done)]
+  return [...shown.filter(isWaiting), ...shown.filter(f => !isWaiting(f) && !done(f)), ...shown.filter(done)]
 }

@@ -30,8 +30,8 @@ const PANE = {
 // Flattens a drawn tree into its lines of text, for asserting and previewing.
 const lines = (node: unknown): string[] => {
   if (typeof node === 'string') return [node]
-  const el = node as { type: string; children: unknown[] }
-  const parts = el.children.map(lines)
+  const el = node as { type: string; children?: unknown[] }
+  const parts = (el.children ?? []).map(lines) // a Button carries its label, no children
   return el.type === 'Text' ? [parts.flat().join('')] : parts.flat()
 }
 
@@ -231,3 +231,56 @@ test('off-format finished files render as one smiley line and clear hides them',
   const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await again.find({ type: 'Text', text: 'No running work' })).toBeDefined()
 })
+
+const ASK = JSON.stringify({
+  title: 'Power phase 3',
+  updated: '2026/10/15 20:02:00',
+  now: { action: 'done', since: '' }, // a waiting task keeps the file open even so
+  tasks: [{ name: 'Build', status: 'done' }, { name: 'Merge', status: 'waiting', detail: 'OK to merge PR #330?' }],
+})
+
+test('waiting: lenient parse, summary, not finished', () => {
+  const t = (s: string) => parseProgress('a.json', JSON.stringify({ tasks: [{ name: 'n', status: s }] })).tasks[0]
+  expect(t('waiting: merge?')).toEqual({ name: 'n', status: 'waiting', detail: 'merge?' })
+  expect(t('Wait for review').status).toBe('waiting')
+  expect(t('blocked-on-user: creds').status).toBe('waiting')
+  const f = parseProgress('a.json', ASK)
+  expect(isFinished(f)).toBe(false)
+  expect(summary(f.tasks)).toBe('1/2 done · 1 waiting')
+})
+
+test('a waiting file sorts first and shows the question highlighted with three buttons', async ($, on) => {
+  // a.json is newest and running, d.json finished, w.json oldest but waiting: waiting comes first.
+  world(on, { 'd.json': DONE('2026/10/15 20:00:00'), 'bios.json': BIOS, 'w.json': ASK })
+  await $.command.run({ command: 'progress', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const text = lines((await ui.find({ type: 'Box' }))!)
+  const q = '🙋 Merge — OK to merge PR #330?'
+  expect(text.indexOf('Power phase 3')).toBeLessThan(text.indexOf('BIOS phase 2'))
+  expect(text.indexOf('BIOS phase 2')).toBeLessThan(text.indexOf('😊 Done one — done · 1 tasks · updated 20:00:00'))
+  expect((await ui.find({ type: 'Text', text: q }))?.props.color).toBe('permission')
+  for (const a of ['Done', 'In progress', 'Blocked']) {
+    expect(await ui.find({ key: `w.json|2026/10/15 20:02:00|Merge|${a}` })).toBeDefined()
+  }
+})
+
+for (const answer of ['Done', 'In progress', 'Blocked']) {
+  test(`pressing ${answer} submits the answer as a user turn and shows it until the file changes`, async ($, on) => {
+    const folder: Record<string, string> = { 'w.json': ASK }
+    world(on, folder)
+    const sent: { text: string; asUser?: boolean }[] = []
+    on('prompt.submit', ($, e) => { sent.push({ text: e.text, asUser: e.origin?.kind === 'plugin' ? e.origin.asUser : undefined }); return { text: e.text } })
+    await $.command.run({ command: 'progress', args: '' })
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: `w.json|2026/10/15 20:02:00|Merge|${answer}` })
+    expect(sent).toEqual([{ text: `[progress] Power phase 3 › Merge: ${answer}`, asUser: true }])
+    const text = lines((await ui.find({ type: 'Box' }))!)
+    expect(text).toContain(`  ✓ answered: ${answer}`)
+    expect(await ui.find({ key: `w.json|2026/10/15 20:02:00|Merge|Done` })).toBeUndefined()
+    await ui.unmount()
+    folder['w.json'] = ASK.replace('20:02:00', '20:09:00')
+    await $.command.run({ command: 'progress', args: 'refresh' })
+    const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await again.find({ key: `w.json|2026/10/15 20:09:00|Merge|${answer}` })).toBeDefined()
+  })
+}

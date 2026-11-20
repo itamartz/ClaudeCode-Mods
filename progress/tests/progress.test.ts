@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { elapsed, isFinished, parseProgress, summary } from '../hooks/progress.js'
+import { elapsed, isFinished, parseProgress, shownTasks, summary, taskKey } from '../hooks/progress.js'
 
 const BIOS = JSON.stringify({
   title: 'BIOS phase 2',
@@ -30,8 +30,8 @@ const PANE = {
 // Flattens a drawn tree into its lines of text, for asserting and previewing.
 const lines = (node: unknown): string[] => {
   if (typeof node === 'string') return [node]
-  const el = node as { type: string; children: unknown[] }
-  const parts = el.children.map(lines)
+  const el = node as { type: string; children?: unknown[] }
+  const parts = (el.children ?? []).map(lines) // a Button carries its label, no children
   return el.type === 'Text' ? [parts.flat().join('')] : parts.flat()
 }
 
@@ -230,4 +230,113 @@ test('off-format finished files render as one smiley line and clear hides them',
   expect((await $.command.run({ command: 'progress', args: 'clear' })).text).toBe('Cleared 4 finished.')
   const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await again.find({ type: 'Text', text: 'No running work' })).toBeDefined()
+})
+
+const ASK = JSON.stringify({
+  title: 'Power phase 3',
+  updated: '2026/10/15 20:02:00',
+  now: { action: 'done', since: '' }, // a waiting task keeps the file open even so
+  tasks: [{ name: 'Build', status: 'done' }, { name: 'Merge', status: 'waiting', detail: 'OK to merge PR #330?' }],
+})
+
+test('waiting: lenient parse, summary, not finished', () => {
+  const t = (s: string) => parseProgress('a.json', JSON.stringify({ tasks: [{ name: 'n', status: s }] })).tasks[0]
+  expect(t('waiting: merge?')).toEqual({ name: 'n', status: 'waiting', detail: 'merge?' })
+  expect(t('Wait for review').status).toBe('waiting')
+  expect(t('blocked-on-user: creds').status).toBe('waiting')
+  const f = parseProgress('a.json', ASK)
+  expect(isFinished(f)).toBe(false)
+  expect(summary(f.tasks)).toBe('1/2 done · 1 waiting')
+})
+
+test('a waiting file sorts first and shows the question highlighted with three buttons', async ($, on) => {
+  // a.json is newest and running, d.json finished, w.json oldest but waiting: waiting comes first.
+  world(on, { 'd.json': DONE('2026/10/15 20:00:00'), 'bios.json': BIOS, 'w.json': ASK })
+  await $.command.run({ command: 'progress', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const text = lines((await ui.find({ type: 'Box' }))!)
+  const q = '🙋 Merge — OK to merge PR #330?'
+  expect(text.indexOf('Power phase 3')).toBeLessThan(text.indexOf('BIOS phase 2'))
+  expect(text.indexOf('BIOS phase 2')).toBeLessThan(text.indexOf('😊 Done one — done · 1 tasks · updated 20:00:00'))
+  expect((await ui.find({ type: 'Text', text: q }))?.props.color).toBe('permission')
+  for (const a of ['Done', 'In progress', 'Blocked']) {
+    expect(await ui.find({ key: `w.json|2026/10/15 20:02:00|Merge|${a}` })).toBeDefined()
+  }
+})
+
+for (const answer of ['Done', 'In progress', 'Blocked']) {
+  test(`pressing ${answer} submits the answer as a user turn and shows it until the file changes`, async ($, on) => {
+    const folder: Record<string, string> = { 'w.json': ASK }
+    world(on, folder)
+    const sent: { text: string; asUser?: boolean }[] = []
+    on('prompt.submit', ($, e) => { sent.push({ text: e.text, asUser: e.origin?.kind === 'plugin' ? e.origin.asUser : undefined }); return { text: e.text } })
+    await $.command.run({ command: 'progress', args: '' })
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: `w.json|2026/10/15 20:02:00|Merge|${answer}` })
+    expect(sent).toEqual([{ text: `[progress] Power phase 3 › Merge: ${answer}`, asUser: true }])
+    const text = lines((await ui.find({ type: 'Box' }))!)
+    expect(text).toContain(`  ✓ answered: ${answer}`)
+    expect(await ui.find({ key: `w.json|2026/10/15 20:02:00|Merge|Done` })).toBeUndefined()
+    await ui.unmount()
+    folder['w.json'] = ASK.replace('20:02:00', '20:09:00')
+    await $.command.run({ command: 'progress', args: 'refresh' })
+    const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await again.find({ key: `w.json|2026/10/15 20:09:00|Merge|${answer}` })).toBeDefined()
+  })
+}
+
+test('clear tasks: only done tasks with a hidden key are hidden; summary counts them', () => {
+  const f = parseProgress('a.json', BIOS)
+  const keys = f.tasks.map(t => taskKey(f, t)) // every name keyed, done or not
+  expect(taskKey(f, f.tasks[0])).toBe('a.json|Catalog')
+  expect(shownTasks(f, keys).map(t => t.name)).toEqual(['Agent apply', 'E2E', 'Licence'])
+  expect(shownTasks(f, []).length).toBe(4)
+  expect(summary(f.tasks, 1)).toBe('1/4 done · 1 running · 1 failed · 1 hidden')
+  expect(summary(f.tasks, 0)).toBe('1/4 done · 1 running · 1 failed')
+})
+
+test('/progress clear tasks hides done tasks in running cards, kept in the store; show un-hides', async ($, on) => {
+  const folder: Record<string, string> = { 'bios.json': BIOS, 'd.json': DONE('2026/10/15 20:00:00') }
+  world(on, folder)
+  await $.command.run({ command: 'progress', args: '' })
+  expect((await $.command.run({ command: 'progress', args: 'clear tasks' })).text).toBe('Hid 1 done tasks.')
+  let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  let text = lines((await ui.find({ type: 'Box' }))!)
+  expect(text).toContain('1/4 done · 1 running · 1 failed · 1 hidden · updated 20:00:00 · checked 20:05:00')
+  expect(text).not.toContain('✓ Catalog — 42 attributes')
+  expect(text).toContain('● Agent apply — PC-5')
+  expect(text).toContain('😊 Done one — done · 1 tasks · updated 20:00:00') // plain clear's job, not this one
+  await ui.unmount()
+  // refresh re-reads $.store, so Catalog staying hidden proves the key was stored.
+  // A task that becomes done later stays shown until the next clear tasks.
+  folder['bios.json'] = BIOS.replace('"running"', '"done"')
+  await $.command.run({ command: 'progress', args: 'refresh' })
+  ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  text = lines((await ui.find({ type: 'Box' }))!)
+  expect(text).toContain('✓ Agent apply — PC-5')
+  expect(text).not.toContain('✓ Catalog — 42 attributes')
+  await ui.unmount()
+  expect((await $.command.run({ command: 'progress', args: 'show' })).text).toBe('Showing everything.')
+  ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(lines((await ui.find({ type: 'Box' }))!)).toContain('✓ Catalog — 42 attributes')
+})
+
+test('a hidden key never hides a task that is not done', async ($, on) => {
+  world(on, { 'bios.json': BIOS }, { hiddenTasks: ['bios.json|Agent apply', 'bios.json|Catalog'] })
+  await $.command.run({ command: 'progress', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const text = lines((await ui.find({ type: 'Box' }))!)
+  expect(text).toContain('● Agent apply — PC-5')
+  expect(text).not.toContain('✓ Catalog — 42 attributes')
+  expect(text).toContain('1/4 done · 1 running · 1 failed · 1 hidden · updated 20:00:00 · checked 20:05:00')
+})
+
+test('/progress clear all hides finished cards and done tasks', async ($, on) => {
+  world(on, { 'bios.json': BIOS, 'd.json': DONE('2026/10/15 20:00:00') })
+  await $.command.run({ command: 'progress', args: '' })
+  expect((await $.command.run({ command: 'progress', args: 'clear all' })).text).toBe('Cleared 1 finished. Hid 1 done tasks.')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const text = lines((await ui.find({ type: 'Box' }))!)
+  expect(text.some(l => l.startsWith('😊'))).toBe(false)
+  expect(text).not.toContain('✓ Catalog — 42 attributes')
 })

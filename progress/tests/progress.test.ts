@@ -166,6 +166,17 @@ test('running files come first, finished after', async ($, on) => {
   expect(text.indexOf('BIOS phase 2')).toBeLessThan(text.indexOf('😊 Done one — done · 1 tasks · updated 20:00:00'))
 })
 
+test('roadmap.json sorts last even when it is the newest and running', async ($, on) => {
+  const ROADMAP = JSON.stringify({ title: 'Features / Roadmap', updated: '2026/10/15 23:00:00', tasks: [{ name: 'r', status: 'running' }] })
+  world(on, { 'roadmap.json': ROADMAP, 'd.json': DONE('2026/10/15 20:00:00'), 'bios.json': BIOS })
+  await $.command.run({ command: 'progress', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const text = lines((await ui.find({ type: 'Box' }))!)
+  const road = text.findIndex(l => l.includes('Features / Roadmap'))
+  expect(road).toBeGreaterThan(text.indexOf('😊 Done one — done · 1 tasks · updated 20:00:00'))
+  expect(road).toBeGreaterThan(text.indexOf('BIOS phase 2'))
+})
+
 test('clear hides finished files until their "updated" changes', async ($, on) => {
   const folder: Record<string, string> = { 'd.json': DONE('2026/10/15 20:00:00') }
   world(on, folder)

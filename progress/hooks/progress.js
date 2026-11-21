@@ -106,9 +106,13 @@ export const answerText = (f, t, answer) => `[progress] ${f.title} › ${t.name}
 
 export const ANSWERS = ['Done', 'In progress', 'Blocked']
 
-// Not dismissed; waiting on the user first, then running, finished last; each group keeps its newest-first order.
+// The roadmap card always sits last, whatever its state or age (owner 2026-11-21).
+export const LAST_FILE = 'roadmap.json'
+
+// Not dismissed; waiting on the user first, then running, finished last; each group keeps its newest-first order; roadmap.json after all.
 export function visible(list, dismissed) {
   const shown = list.filter(f => !dismissed.includes(dismissKey(f)))
   const done = isFinished
-  return [...shown.filter(isWaiting), ...shown.filter(f => !isWaiting(f) && !done(f)), ...shown.filter(done)]
+  const ordered = [...shown.filter(isWaiting), ...shown.filter(f => !isWaiting(f) && !done(f)), ...shown.filter(done)]
+  return [...ordered.filter(f => f.file !== LAST_FILE), ...ordered.filter(f => f.file === LAST_FILE)]
 }
